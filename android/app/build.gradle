@@ -21,6 +21,55 @@ if (flutterVersionName == null) {
     flutterVersionName = '1.0'
 }
 
+def configureAapt2Override() {
+    if (System.properties['android.aapt2FromMavenOverride']) {
+        return
+    }
+
+    def sdkDirCandidate = localProperties.getProperty('sdk.dir') ?: System.getenv('ANDROID_SDK_ROOT') ?: System.getenv('ANDROID_HOME')
+    if (!sdkDirCandidate) {
+        return
+    }
+
+    def sdkDir = new File(sdkDirCandidate)
+    def buildToolsDir = new File(sdkDir, 'build-tools')
+    if (!buildToolsDir.isDirectory()) {
+        return
+    }
+
+    def binaryName = org.gradle.internal.os.OperatingSystem.current().isWindows() ? 'aapt2.exe' : 'aapt2'
+
+    def candidates = buildToolsDir.listFiles()?.findAll { File dir ->
+        new File(dir, binaryName).exists()
+    }
+
+    if (!candidates || candidates.isEmpty()) {
+        return
+    }
+
+    def safeParseVersion = { String name ->
+        try {
+            return org.gradle.util.VersionNumber.parse(name)
+        } catch (Exception ignored) {
+            return org.gradle.util.VersionNumber.parse('0.0.0')
+        }
+    }
+
+    candidates.sort { File left, File right ->
+        safeParseVersion(left.name) <=> safeParseVersion(right.name)
+    }
+
+    def selected = candidates.last()
+    def aapt2Executable = new File(selected, binaryName)
+    if (aapt2Executable.exists()) {
+        def overrideValue = aapt2Executable.absolutePath
+        System.properties['android.aapt2FromMavenOverride'] = overrideValue
+        project.extensions.extraProperties.set('android.aapt2FromMavenOverride', overrideValue)
+    }
+}
+
+configureAapt2Override()
+
 apply plugin: 'com.android.application'
 apply plugin: 'kotlin-android'
 apply from: "$flutterRoot/packages/flutter_tools/gradle/flutter.gradle"
