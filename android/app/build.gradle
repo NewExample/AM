@@ -30,6 +30,7 @@ def configureAapt2Override(Properties localProps) {
 
     def setOverrideFromFile = { File executable ->
         if (executable?.exists()) {
+            executable.setExecutable(true, true)
             def overrideValue = executable.absolutePath
             System.properties['android.aapt2FromMavenOverride'] = overrideValue
             project.extensions.extraProperties.set('android.aapt2FromMavenOverride', overrideValue)
@@ -91,8 +92,33 @@ def configureAapt2Override(Properties localProps) {
         }
     }
 
-    def unpackedExecutable = new File(unpackDir, binaryName)
-    setOverrideFromFile(unpackedExecutable)
+    def locateBinary = { File dir ->
+        if (!dir?.exists()) {
+            return null
+        }
+
+        def queue = [dir]
+        while (!queue.isEmpty()) {
+            def current = queue.remove(0)
+            def candidate = new File(current, binaryName)
+            if (candidate.exists()) {
+                return candidate
+            }
+
+            current.listFiles()?.findAll { File child -> child.isDirectory() }?.each { File child ->
+                queue.add(child)
+            }
+        }
+
+        return null
+    }
+
+    def unpackedExecutable = locateBinary(unpackDir)
+    if (unpackedExecutable != null) {
+        setOverrideFromFile(unpackedExecutable)
+    } else {
+        project.logger.warn("Unable to locate the unpacked aapt2 binary in \"${unpackDir.absolutePath}\"")
+    }
 }
 
 configureAapt2Override(localProperties)
