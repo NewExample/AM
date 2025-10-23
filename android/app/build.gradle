@@ -1,3 +1,5 @@
+import groovy.xml.XmlSlurper
+
 def localProperties = new Properties()
 def localPropertiesFile = rootProject.file('local.properties')
 if (localPropertiesFile.exists()) {
@@ -76,7 +78,48 @@ def configureAapt2Override(Properties localProps) {
     }
 
     // Fall back to downloading a modern AAPT2 binary from Google Maven when local build tools are too old.
-    def aapt2Version = '8.2.0-10154469'
+    def resolveLatestAapt2Version = {
+        def defaultVersion = '8.2.0-10154469'
+        try {
+            def metadataUrl = new URL('https://dl.google.com/dl/android/maven2/com/android/tools/build/aapt2/maven-metadata.xml')
+            def metadata = new XmlSlurper().parse(metadataUrl)
+
+            def releaseVersion = metadata?.versioning?.release?.text()
+            if (releaseVersion) {
+                return releaseVersion
+            }
+
+            def versions = metadata?.versioning?.versions?.version*.text()
+            if (versions) {
+                def comparator = { String left, String right ->
+                    def splitVersion = { String value ->
+                        def idx = value.indexOf('-')
+                        def base = idx >= 0 ? value.substring(0, idx) : value
+                        def suffix = idx >= 0 ? value.substring(idx + 1) : ''
+                        [org.gradle.util.VersionNumber.parse(base), suffix]
+                    }
+
+                    def leftParts = splitVersion(left)
+                    def rightParts = splitVersion(right)
+
+                    def baseCompare = leftParts[0] <=> rightParts[0]
+                    if (baseCompare != 0) {
+                        return baseCompare
+                    }
+
+                    return leftParts[1] <=> rightParts[1]
+                }
+
+                return versions.sort(false, comparator).last()
+            }
+        } catch (Exception ex) {
+            project.logger.info("Unable to query latest AAPT2 version: ${ex.message}")
+        }
+
+        return defaultVersion
+    }
+
+    def aapt2Version = resolveLatestAapt2Version()
     def configuration = project.configurations.detachedConfiguration(
             project.dependencies.create("com.android.tools.build:aapt2:$aapt2Version")
     )
