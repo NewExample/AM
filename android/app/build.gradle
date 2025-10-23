@@ -21,12 +21,12 @@ if (flutterVersionName == null) {
     flutterVersionName = '1.0'
 }
 
-def configureAapt2Override() {
+def configureAapt2Override(Properties localProps) {
     if (System.properties['android.aapt2FromMavenOverride']) {
         return
     }
 
-    def sdkDirCandidate = localProperties.getProperty('sdk.dir') ?: System.getenv('ANDROID_SDK_ROOT') ?: System.getenv('ANDROID_HOME')
+    def sdkDirCandidate = localProps.getProperty('sdk.dir') ?: System.getenv('ANDROID_SDK_ROOT') ?: System.getenv('ANDROID_HOME')
     if (!sdkDirCandidate) {
         return
     }
@@ -68,7 +68,7 @@ def configureAapt2Override() {
     }
 }
 
-configureAapt2Override()
+configureAapt2Override(localProperties)
 
 apply plugin: 'com.android.application'
 apply plugin: 'kotlin-android'
