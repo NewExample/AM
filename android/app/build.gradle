@@ -28,8 +28,6 @@ apply plugin: 'com.google.gms.google-services'
 
 android {
 
-    namespace 'com.client.amelia'
-
     compileSdkVersion 35
 
     // compileOptions {
