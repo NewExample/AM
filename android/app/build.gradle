@@ -1,3 +1,5 @@
+import groovy.xml.XmlSlurper
+
 def localProperties = new Properties()
 def localPropertiesFile = rootProject.file('local.properties')
 if (localPropertiesFile.exists()) {
@@ -21,6 +23,149 @@ if (flutterVersionName == null) {
     flutterVersionName = '1.0'
 }
 
+def configureAapt2Override(Properties localProps) {
+    if (System.properties['android.aapt2FromMavenOverride']) {
+        return
+    }
+
+    def binaryName = org.gradle.internal.os.OperatingSystem.current().isWindows() ? 'aapt2.exe' : 'aapt2'
+
+    def setOverrideFromFile = { File executable ->
+        if (executable?.exists()) {
+            executable.setExecutable(true, true)
+            def overrideValue = executable.absolutePath
+            System.properties['android.aapt2FromMavenOverride'] = overrideValue
+            project.extensions.extraProperties.set('android.aapt2FromMavenOverride', overrideValue)
+            return true
+        }
+        return false
+    }
+
+    def sdkDirCandidate = localProps.getProperty('sdk.dir') ?: System.getenv('ANDROID_SDK_ROOT') ?: System.getenv('ANDROID_HOME')
+    if (sdkDirCandidate) {
+        def sdkDir = new File(sdkDirCandidate)
+        def buildToolsDir = new File(sdkDir, 'build-tools')
+        if (buildToolsDir.isDirectory()) {
+            def safeParseVersion = { String name ->
+                try {
+                    return org.gradle.util.VersionNumber.parse(name)
+                } catch (Exception ignored) {
+                    return org.gradle.util.VersionNumber.parse('0.0.0')
+                }
+            }
+
+            def candidates = buildToolsDir.listFiles()?.findAll { File dir ->
+                new File(dir, binaryName).exists()
+            }
+
+            candidates = candidates?.sort { File left, File right ->
+                safeParseVersion(left.name) <=> safeParseVersion(right.name)
+            } ?: []
+
+            // Prefer build tools 35+ because earlier AAPT2 binaries cannot link API 35 resources.
+            def preferred = candidates.reverse().find { File dir ->
+                safeParseVersion(dir.name) >= org.gradle.util.VersionNumber.parse('35.0.0')
+            }
+
+            if (!preferred && !candidates.isEmpty()) {
+                preferred = candidates.last()
+            }
+
+            if (preferred && setOverrideFromFile(new File(preferred, binaryName))) {
+                return
+            }
+        }
+    }
+
+    // Fall back to downloading a modern AAPT2 binary from Google Maven when local build tools are too old.
+    def resolveLatestAapt2Version = {
+        def defaultVersion = '8.2.0-10154469'
+        try {
+            def metadataUrl = new URL('https://dl.google.com/dl/android/maven2/com/android/tools/build/aapt2/maven-metadata.xml')
+            def metadata = new XmlSlurper().parse(metadataUrl)
+
+            def releaseVersion = metadata?.versioning?.release?.text()
+            if (releaseVersion) {
+                return releaseVersion
+            }
+
+            def versions = metadata?.versioning?.versions?.version*.text()
+            if (versions) {
+                def comparator = { String left, String right ->
+                    def splitVersion = { String value ->
+                        def idx = value.indexOf('-')
+                        def base = idx >= 0 ? value.substring(0, idx) : value
+                        def suffix = idx >= 0 ? value.substring(idx + 1) : ''
+                        [org.gradle.util.VersionNumber.parse(base), suffix]
+                    }
+
+                    def leftParts = splitVersion(left)
+                    def rightParts = splitVersion(right)
+
+                    def baseCompare = leftParts[0] <=> rightParts[0]
+                    if (baseCompare != 0) {
+                        return baseCompare
+                    }
+
+                    return leftParts[1] <=> rightParts[1]
+                }
+
+                return versions.sort(false, comparator).last()
+            }
+        } catch (Exception ex) {
+            project.logger.info("Unable to query latest AAPT2 version: ${ex.message}")
+        }
+
+        return defaultVersion
+    }
+
+    def aapt2Version = resolveLatestAapt2Version()
+    def configuration = project.configurations.detachedConfiguration(
+            project.dependencies.create("com.android.tools.build:aapt2:$aapt2Version")
+    )
+    configuration.setTransitive(false)
+
+    def artifact = configuration.singleFile
+    def unpackDir = new File(rootProject.buildDir, "aapt2/$aapt2Version")
+    if (!unpackDir.exists()) {
+        unpackDir.mkdirs()
+        project.copy {
+            from project.zipTree(artifact)
+            into unpackDir
+        }
+    }
+
+    def locateBinary = { File dir ->
+        if (!dir?.exists()) {
+            return null
+        }
+
+        def queue = [dir]
+        while (!queue.isEmpty()) {
+            def current = queue.remove(0)
+            def candidate = new File(current, binaryName)
+            if (candidate.exists()) {
+                return candidate
+            }
+
+            current.listFiles()?.findAll { File child -> child.isDirectory() }?.each { File child ->
+                queue.add(child)
+            }
+        }
+
+        return null
+    }
+
+    def unpackedExecutable = locateBinary(unpackDir)
+    if (unpackedExecutable != null) {
+        setOverrideFromFile(unpackedExecutable)
+    } else {
+        project.logger.warn("Unable to locate the unpacked aapt2 binary in \"${unpackDir.absolutePath}\"")
+    }
+}
+
+configureAapt2Override(localProperties)
+
 apply plugin: 'com.android.application'
 apply plugin: 'kotlin-android'
 apply from: "$flutterRoot/packages/flutter_tools/gradle/flutter.gradle"
@@ -28,9 +173,8 @@ apply plugin: 'com.google.gms.google-services'
 
 android {
 
-    namespace 'com.client.amelia'
-
     compileSdkVersion 35
+    buildToolsVersion '35.0.0'
 
     // compileOptions {
     //     sourceCompatibility JavaVersion.VERSION_1_8
